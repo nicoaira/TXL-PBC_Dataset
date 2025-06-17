@@ -1,60 +1,65 @@
-# TXL-PBC Dataset
+# TXL-PBC: A Curated and Re-annotated Peripheral Blood Cell Dataset
 
 ## Overview
 
-The TXL-PBC Dataset is a comprehensive collection of re-annotated and integrated cell images from multiple cell datasets. The main objective of this study is to perform sample reduction, re-labeling, and integration from [BCCD](https://github.com/Shenggan/BCCD_Dataset) and [BCD datasets](https://www.kaggle.com/datasets/adhoppin/blood-celldetection-datatset). Then, the original dataset is integrated with two new cell datasets, PBC dataset [Peripheral Blood Cells](https://pubmed.ncbi.nlm.nih.gov/32346559/) and Raabin-WBC dataset [Raabin White Blood Cells](https://raabindata.com/raabin-health-database/), to create a high-quality, sample balanced new dataset. We call it TXL-PBC dataset. We use the [Labelimg](https://github.com/HumanSignal/labelImg) tool Semi-automated labeling is performed using [YOLOv8n](https://github.com/ultralytics/ultralytics).to annotate all the datasets. It is specifically designed for evaluating various object detection models, especially those that use the YOLO format.
+TXL-PBC is a curated and re-annotated peripheral blood cell dataset constructed by integrating four publicly available resources:  
+- Blood Cell Count and Detection (BCCD)  
+- Blood Cell Detection Dataset (BCDD)  
+- Peripheral Blood Cells (PBC)  
+- Raabin White Blood Cell (Raabin-WBC)  
 
+The dataset contains 1,260 images and 18,143 bounding box annotations for three major blood cell types:  
+- White blood cells (WBC)  
+- Red blood cells (RBC)  
+- Platelets (PC)  
 
-## Contents
- TXL-PBC dataset is divided into a training set (train: 1008), a validation set (val: 288), and a test set (test: 144).
-You can see a example of the labeled cell image.
-[TXL-PBC Dataset Example](example.png)
-We have three kind of labels :
+All images are annotated in YOLO format and split into training, validation, and test sets.
 
-'RBC' (Red Blood Cell)
-'WBC' (White Blood Cell)
-'Platelets'
+## Directory Structure
 
-## Dataset Structure
-
-The dataset is organized as follows:
 ```
-TXL-PBC-Dataset/
+TXL-PBC/
 ├── images/
-│ ├── train/
-│ │ ├── img1.jpg
-│ │ ├── img2.jpg
-│ │ └── ...
-│ ├── test/
-│ │ ├── img1.jpg
-│ │ ├── img2.jpg
-│ │ └── ...
-│ └── val/
-│ ├── img1.jpg
-│ ├── img2.jpg
-│ └── ...
+│   ├── train/
+│   ├── val/
+│   └── test/
 ├── labels/
-│ ├── train/
-│ │ ├── img1.txt
-│ │ ├── img2.txt
-│ │ └── ...
-│ ├── test/
-│ │ ├── img1.txt
-│ │ ├── img2.txt
-│ │ └── ...
-│ └── val/
-│ ├── img1.txt
-│ ├── img2.txt
-│ └── ...
-│ ├── classes.txt
+│   ├── train/
+│   ├── val/
+│   └── test/
 ├── data.yaml
-└── README.md
+├── BCCD_selection.xlsx
+├── metadata_file.xlsx
+└── annotation_protocol.pdf
 ```
 
+- `images/`: Contains all images, split into train/val/test.
+- `labels/`: YOLO-format annotation files, split into train/val/test.
+- `data.yaml`: YOLO configuration file.
+- `BCCD_selection.xlsx`: List of selected and excluded BCCD images.
+- `metadata.csv`: Mapping of image filenames to source datasets.
+- `annotation_protocol.pdf`: Manual annotation guidelines.
 
-- images/: Contains train, test, and val subfolders with the respective images.
-- labels/: Contains train, test, val, and classes subfolders with the respective YOLO format annotation files.
-- data.yaml: Contains dataset configuration for YOLO.
+## Usage
+
+- The dataset can be used directly with object detection frameworks such as YOLO.
+- Recommended preprocessing: image normalization and data augmentation.
+- Suitable for training, validation, and benchmarking of blood cell detection models.
+- Can be combined with other datasets for cross-validation or transfer learning.
+
+## Citation
+
+If you use this dataset in your research, please cite:
+
+```
+Lu Gan, Xi Li, Xichun Wang. TXL-PBC: A Curated and Re-annotated Peripheral Blood Cell Dataset Integrating Four Public Resources. 2024.
+```
+
+## License
+
+This dataset is released for academic and non-commercial use.
+
+
 
 ## License
 This dataset is licensed under the [MIT License](LICENSE).
