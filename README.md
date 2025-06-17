@@ -47,18 +47,6 @@ TXL-PBC/
 - Suitable for training, validation, and benchmarking of blood cell detection models.
 - Can be combined with other datasets for cross-validation or transfer learning.
 
-## Citation
-
-If you use this dataset in your research, please cite:
-
-```
-Lu Gan, Xi Li, Xichun Wang. TXL-PBC: A Curated and Re-annotated Peripheral Blood Cell Dataset Integrating Four Public Resources. 2024.
-```
-
-## License
-
-This dataset is released for academic and non-commercial use.
-
 
 
 ## License
