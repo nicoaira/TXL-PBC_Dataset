@@ -29,6 +29,7 @@ TXL-PBC/
 │   └── test/
 ├── data.yaml
 ├── BCCD_selection.xlsx
+├── classes.txt
 ├── metadata_file.xlsx
 └── annotation_protocol.pdf
 ```
