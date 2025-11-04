@@ -53,7 +53,24 @@ TXL-PBC/
 ## License
 This dataset is licensed under the [MIT License](LICENSE).
 
-## Citing TXL-PBC Dataset
-If you're using this dataset, please cite: Lu Gan, Xi Li [A Curated and Re-annotated Peripheral Blood Cell Dataset Integrating Four Public Resources]([https://arxiv.org/abs/2407.13214](https://doi.org/10.1038/s41597-025-05980-z) 	
+## Citing the TXL-PBC Dataset
+
+If you use this dataset in your research, please cite our paper:
+
+> Gan, L., Li, X. & Wang, X. A Curated and Re-annotated Peripheral Blood Cell Dataset Integrating Four Public Resources. *Sci Data* **12**, 1694 (2025).  
+> https://doi.org/10.1038/s41597-025-05980-z
+
+**BibTeX entry:**
+```bibtex
+@article{gan2025curated,
+  title={A Curated and Re-annotated Peripheral Blood Cell Dataset Integrating Four Public Resources},
+  author={Gan, Lu and Li, Xi and Wang, Xichun},
+  journal={Scientific Data},
+  volume={12},
+  number={1},
+  pages={1694},
+  year={2025},
+  publisher={Nature Publishing Group UK London}
+}
 
 
