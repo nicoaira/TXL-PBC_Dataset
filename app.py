@@ -19,6 +19,66 @@ from PIL import Image, ImageDraw, ImageFont
 # Firebase auth
 # ---------------------------------------------------------------------------
 
+_AUTH_CSS = """
+<style>
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+    min-height: 100vh;
+}
+[data-testid="stHeader"] { background: transparent; }
+#MainMenu, footer { visibility: hidden; }
+
+div[data-testid="stVerticalBlock"] .auth-card {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 20px;
+    padding: 2.5rem 2rem;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+.auth-logo {
+    font-size: 3.5rem;
+    text-align: center;
+    margin-bottom: 0.2rem;
+}
+.auth-title {
+    text-align: center;
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #ffffff;
+    margin: 0;
+}
+.auth-subtitle {
+    text-align: center;
+    color: rgba(255,255,255,0.45);
+    font-size: 0.88rem;
+    margin-bottom: 1.8rem;
+}
+.auth-divider {
+    display: flex;
+    align-items: center;
+    color: rgba(255,255,255,0.3);
+    font-size: 0.82rem;
+    margin: 1.2rem 0;
+}
+.auth-divider::before, .auth-divider::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px solid rgba(255,255,255,0.15);
+    margin: 0 0.6rem;
+}
+/* Style the submit buttons */
+div[data-testid="stForm"] button[kind="primaryFormSubmit"] {
+    background: linear-gradient(90deg, #667eea, #764ba2);
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+}
+</style>
+"""
+
+
 @st.cache_resource
 def _firebase_auth():
     import pyrebase
@@ -48,7 +108,7 @@ def _do_login(email: str, password: str) -> None:
         st.session_state.auth_error = None
     except Exception as exc:
         msg = str(exc)
-        if "INVALID_PASSWORD" in msg or "EMAIL_NOT_FOUND" in msg or "INVALID_LOGIN_CREDENTIALS" in msg:
+        if any(k in msg for k in ("INVALID_PASSWORD", "EMAIL_NOT_FOUND", "INVALID_LOGIN_CREDENTIALS")):
             st.session_state.auth_error = "Invalid email or password."
         else:
             st.session_state.auth_error = "Login failed. Please try again."
@@ -69,39 +129,114 @@ def _do_register(email: str, password: str) -> None:
             st.session_state.auth_error = "Registration failed. Please try again."
 
 
+def _do_google_signin() -> None:
+    import requests
+    try:
+        from streamlit_oauth import OAuth2Component
+    except ImportError:
+        st.session_state.auth_error = "streamlit-oauth not installed."
+        return
+
+    try:
+        g = st.secrets["google"]
+        redirect_uri = st.secrets.get("app", {}).get("redirect_uri", "http://localhost:8501")
+    except KeyError:
+        st.warning("Google sign-in is not configured yet.")
+        return
+
+    oauth2 = OAuth2Component(
+        client_id=g["client_id"],
+        client_secret=g["client_secret"],
+        authorize_endpoint="https://accounts.google.com/o/oauth2/auth",
+        token_endpoint="https://oauth2.googleapis.com/token",
+        refresh_token_endpoint="https://oauth2.googleapis.com/token",
+        revoke_token_endpoint="https://oauth2.googleapis.com/revoke",
+    )
+    result = oauth2.authorize_button(
+        name="Continue with Google",
+        redirect_uri=redirect_uri,
+        scope="openid email profile",
+        key="google_oauth",
+        icon="https://www.google.com/favicon.ico",
+        use_container_width=True,
+        extras_params={"prompt": "select_account"},
+    )
+    if result and "token" in result:
+        id_token = result["token"].get("id_token", "")
+        api_key = st.secrets["firebase"]["api_key"]
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={api_key}"
+        payload = {
+            "postBody": f"id_token={id_token}&providerId=google.com",
+            "requestUri": redirect_uri,
+            "returnSecureToken": True,
+            "returnIdpCredential": True,
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=10)
+            data = resp.json()
+            if "error" in data:
+                st.session_state.auth_error = data["error"].get("message", "Google sign-in failed.")
+            else:
+                st.session_state.user = {
+                    "email": data.get("email"),
+                    "localId": data.get("localId"),
+                    "idToken": data.get("idToken"),
+                    "displayName": data.get("displayName", ""),
+                }
+                st.session_state.auth_error = None
+                st.rerun()
+        except Exception as exc:
+            st.session_state.auth_error = f"Google sign-in error: {exc}"
+
+
 def _do_logout() -> None:
     st.session_state.user = None
     st.session_state.auth_error = None
 
 
 def render_auth_page() -> None:
-    st.title("TXL-PBC YOLO26 — Sign in")
-    tab_login, tab_register = st.tabs(["Login", "Register"])
+    st.markdown(_AUTH_CSS, unsafe_allow_html=True)
 
-    with tab_login:
-        with st.form("login_form"):
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Login", use_container_width=True)
-        if submitted:
-            _do_login(email, password)
-            st.rerun()
+    _, col, _ = st.columns([1, 1.4, 1])
+    with col:
+        st.markdown('<div class="auth-card">', unsafe_allow_html=True)
+        st.markdown('<div class="auth-logo">🔬</div>', unsafe_allow_html=True)
+        st.markdown('<p class="auth-title">TXL-PBC Detector</p>', unsafe_allow_html=True)
+        st.markdown(
+            '<p class="auth-subtitle">Blood cell detection powered by YOLO26</p>',
+            unsafe_allow_html=True,
+        )
 
-    with tab_register:
-        with st.form("register_form"):
-            email = st.text_input("Email", key="reg_email")
-            password = st.text_input("Password", type="password", key="reg_pw")
-            password2 = st.text_input("Confirm password", type="password", key="reg_pw2")
-            submitted = st.form_submit_button("Create account", use_container_width=True)
-        if submitted:
-            if password != password2:
-                st.session_state.auth_error = "Passwords do not match."
-            else:
-                _do_register(email, password)
+        tab_login, tab_register = st.tabs(["Sign in", "Create account"])
+
+        with tab_login:
+            with st.form("login_form", border=False):
+                email = st.text_input("Email", placeholder="you@example.com")
+                password = st.text_input("Password", type="password", placeholder="••••••••")
+                submitted = st.form_submit_button("Sign in", use_container_width=True, type="primary")
+            if submitted:
+                _do_login(email, password)
                 st.rerun()
 
-    if st.session_state.auth_error:
-        st.error(st.session_state.auth_error)
+        with tab_register:
+            with st.form("register_form", border=False):
+                email = st.text_input("Email", placeholder="you@example.com", key="reg_email")
+                password = st.text_input("Password", type="password", placeholder="Min. 6 characters", key="reg_pw")
+                password2 = st.text_input("Confirm password", type="password", placeholder="Repeat password", key="reg_pw2")
+                submitted = st.form_submit_button("Create account", use_container_width=True, type="primary")
+            if submitted:
+                if password != password2:
+                    st.session_state.auth_error = "Passwords do not match."
+                else:
+                    _do_register(email, password)
+                    st.rerun()
+
+        if st.session_state.auth_error:
+            st.error(st.session_state.auth_error)
+
+        st.markdown('<div class="auth-divider">or</div>', unsafe_allow_html=True)
+        _do_google_signin()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 DEFAULT_MODEL_PATH = Path("runs/yolo26/txl_pbc_yolo26m2/weights/best.pt")
 FALLBACK_MODEL_PATH = Path("runs/yolo26/txl_pbc_yolo26m/weights/best.pt")
