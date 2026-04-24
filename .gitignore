@@ -1,0 +1,8 @@
+runs/
+*.pt
+*.onnx
+*.engine
+*.torchscript
+*.mlpackage/
+__pycache__/
+*.pyc

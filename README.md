@@ -48,6 +48,81 @@ TXL-PBC/
 - Suitable for training, validation, and benchmarking of blood cell detection models.
 - Can be combined with other datasets for cross-validation or transfer learning.
 
+## YOLO26 Fine-Tuning
+
+Install dependencies:
+
+```bash
+python3 -m pip install -U -r requirements.txt
+```
+
+Run preprocessing plus training with defaults:
+
+```bash
+scripts/train_yolo26.sh
+```
+
+Choose the YOLO26 model size and training hyperparameters from the terminal:
+
+```bash
+scripts/train_yolo26.sh --size s --epochs 150 --batch 8 --device 0 --lr0 0.005
+```
+
+The supported `--size` values are `n`, `s`, `m`, `l`, and `x`. The script prepares a cleaned dataset under `runs/datasets/txl_pbc_preprocessed/`, then fine-tunes `yolo26<SIZE>.pt` and writes training artifacts under `runs/yolo26/`.
+If the selected YOLO26 weights are not available locally, the training wrapper downloads them from the latest Ultralytics assets release into `runs/weights/` before training starts.
+
+Training saves `best.pt` and `last.pt` under `runs/yolo26/<run_name>/weights/` by default. To resume an interrupted run, point `--resume` at the previous `last.pt` checkpoint:
+
+```bash
+scripts/train_yolo26.sh --resume runs/yolo26/txl_pbc_yolo26s/weights/last.pt --device 0
+```
+
+To start from any explicit checkpoint or model file:
+
+```bash
+scripts/train_yolo26.sh --model path/to/checkpoint.pt --size s --device 0
+```
+
+Each completed run writes deployment metadata under `runs/yolo26/<run_name>/deployment_metadata/`, including `metadata.json`, `metadata.yaml`, a copied `data.yaml`, optional preprocessing report, checkpoint hashes, class names, training hyperparameters, package versions, CUDA information, and a short model card.
+
+Training history is appended under `runs/yolo26/<run_name>/training_history/`:
+
+```text
+history.jsonl
+history.csv
+pretrain_metrics.json
+run_config.json
+```
+
+Before epoch 1, the script runs a baseline validation by default and stores it as an `epoch: 0` / `event: pretrain_eval` row. For object detection, accuracy is represented by precision, recall, `mAP50`, and `mAP50-95`; loss values are included when Ultralytics exposes them during standalone validation. When resuming from `last.pt`, history continues in the same run directory.
+
+You can change or disable the baseline split:
+
+```bash
+scripts/train_yolo26.sh --size m --pretrain-eval-split test
+scripts/train_yolo26.sh --size m --no-pretrain-eval
+```
+
+You can run the preprocessing step directly:
+
+```bash
+python3 preprocess_yolo_dataset.py --source TXL-PBC --output runs/datasets/txl_pbc_preprocessed
+```
+
+Create annotated prediction samples from the test split:
+
+```bash
+scripts/test_yolo26_samples.sh --model runs/yolo26/txl_pbc_yolo26m2/weights/best.pt --device 0 --num-samples 20
+```
+
+Annotated images are saved as `*_pred.jpg` under `runs/prediction_samples/`. The script also writes `predictions.csv`, `predictions.json`, and `summary.json`. Add `--show-ground-truth` to overlay the original YOLO labels in gray for visual comparison.
+
+For all training options:
+
+```bash
+scripts/train_yolo26.sh --help
+```
+
 
 
 ## License
@@ -72,5 +147,3 @@ If you use this dataset in your research, please cite our paper:
   year={2025},
   publisher={Nature Publishing Group UK London}
 }
-
-
