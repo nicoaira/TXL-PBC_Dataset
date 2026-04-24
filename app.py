@@ -996,7 +996,7 @@ def render_admin_panel() -> None:
     st.caption("Manage users and credits.")
 
     try:
-        st.secrets["firebase_admin"]
+        _ = st.secrets["firebase_admin"]
     except KeyError:
         st.error("Firebase Admin SDK is not configured in Streamlit secrets.")
         st.info(
