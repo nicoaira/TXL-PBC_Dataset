@@ -7,6 +7,7 @@ Pillow>=10.0
 PyYAML>=6.0
 numpy>=1.24
 streamlit>=1.32
+streamlit-cookies-controller>=0.0.4
 streamlit-webrtc>=0.47
 av>=11.0
 stripe>=7.0.0

@@ -21,6 +21,8 @@ from PIL import Image, ImageDraw, ImageFont
 # ---------------------------------------------------------------------------
 
 INITIAL_CREDITS = 10  # free credits granted to every new user
+AUTH_COOKIE_NAME = "txl_pbc_refresh_token"
+AUTH_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 
 # ---------------------------------------------------------------------------
 # Firebase auth
@@ -364,6 +366,102 @@ def _firebase_auth():
     return pyrebase.initialize_app(config).auth()
 
 
+def _cookie_controller():
+    try:
+        from streamlit_cookies_controller import CookieController
+    except ImportError:
+        return None
+    return CookieController()
+
+
+def _set_auth_cookie(refresh_token: str | None) -> None:
+    if not refresh_token:
+        return
+
+    controller = _cookie_controller()
+    if controller is None:
+        return
+
+    from datetime import datetime, timedelta
+
+    controller.set(
+        AUTH_COOKIE_NAME,
+        refresh_token,
+        expires=datetime.now() + timedelta(seconds=AUTH_COOKIE_MAX_AGE),
+        max_age=AUTH_COOKIE_MAX_AGE,
+        secure=False,
+        same_site="strict",
+    )
+
+
+def _clear_auth_cookie() -> None:
+    controller = _cookie_controller()
+    if controller is None:
+        return
+    controller.remove(AUTH_COOKIE_NAME)
+
+
+def _lookup_firebase_user(id_token: str) -> dict[str, Any]:
+    import requests
+
+    api_key = st.secrets["firebase"]["api_key"]
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:lookup?key={api_key}"
+    resp = requests.post(url, json={"idToken": id_token}, timeout=10)
+    data = resp.json()
+    if "error" in data:
+        raise RuntimeError(data["error"].get("message", "Firebase user lookup failed."))
+
+    users = data.get("users") or []
+    if not users:
+        raise RuntimeError("Firebase user lookup returned no users.")
+    return users[0]
+
+
+def _restore_login_from_cookie() -> bool:
+    if st.session_state.get("user"):
+        return True
+
+    controller = _cookie_controller()
+    if controller is None:
+        return False
+
+    refresh_token = controller.get(AUTH_COOKIE_NAME)
+    if not refresh_token:
+        return False
+
+    import requests
+
+    api_key = st.secrets["firebase"]["api_key"]
+    url = f"https://securetoken.googleapis.com/v1/token?key={api_key}"
+    try:
+        resp = requests.post(
+            url,
+            data={"grant_type": "refresh_token", "refresh_token": refresh_token},
+            timeout=10,
+        )
+        data = resp.json()
+        if "error" in data:
+            _clear_auth_cookie()
+            return False
+
+        id_token = data["id_token"]
+        user_info = _lookup_firebase_user(id_token)
+        st.session_state.user = {
+            "email": user_info.get("email", ""),
+            "localId": user_info.get("localId") or data.get("user_id"),
+            "idToken": id_token,
+            "refreshToken": data.get("refresh_token", refresh_token),
+            "displayName": user_info.get("displayName", ""),
+        }
+        st.session_state.auth_error = None
+        _set_auth_cookie(st.session_state.user.get("refreshToken"))
+        _refresh_credits()
+        return True
+    except Exception:
+        _clear_auth_cookie()
+        return False
+
+
 def _init_session() -> None:
     defaults: dict[str, Any] = {
         "user": None,
@@ -381,6 +479,7 @@ def _do_login(email: str, password: str) -> None:
         user = _firebase_auth().sign_in_with_email_and_password(email, password)
         st.session_state.user = user
         st.session_state.auth_error = None
+        _set_auth_cookie(user.get("refreshToken"))
         _refresh_credits()
     except Exception as exc:
         msg = str(exc)
@@ -395,6 +494,7 @@ def _do_register(email: str, password: str) -> None:
         user = _firebase_auth().create_user_with_email_and_password(email, password)
         st.session_state.user = user
         st.session_state.auth_error = None
+        _set_auth_cookie(user.get("refreshToken"))
         _refresh_credits()
     except Exception as exc:
         msg = str(exc)
@@ -458,9 +558,11 @@ def _do_google_signin() -> None:
                     "email": data.get("email"),
                     "localId": data.get("localId"),
                     "idToken": data.get("idToken"),
+                    "refreshToken": data.get("refreshToken"),
                     "displayName": data.get("displayName", ""),
                 }
                 st.session_state.auth_error = None
+                _set_auth_cookie(data.get("refreshToken"))
                 _refresh_credits()
                 st.rerun()
         except Exception as exc:
@@ -471,6 +573,7 @@ def _do_logout() -> None:
     st.session_state.user = None
     st.session_state.auth_error = None
     st.session_state.credits = None
+    _clear_auth_cookie()
 
 
 def render_auth_page() -> None:
@@ -1135,6 +1238,7 @@ def main() -> None:
     )
 
     _init_session()
+    _restore_login_from_cookie()
 
     if not st.session_state.user:
         render_auth_page()
