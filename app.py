@@ -16,59 +16,61 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 # ---------------------------------------------------------------------------
-# Supabase auth
+# Firebase auth
 # ---------------------------------------------------------------------------
 
 @st.cache_resource
-def _supabase_client():
-    from supabase import create_client
-    url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["key"]
-    return create_client(url, key)
+def _firebase_auth():
+    import pyrebase
+    cfg = st.secrets["firebase"]
+    config = {
+        "apiKey": cfg["api_key"],
+        "authDomain": cfg["auth_domain"],
+        "projectId": cfg["project_id"],
+        "storageBucket": cfg["storage_bucket"],
+        "messagingSenderId": cfg["messaging_sender_id"],
+        "appId": cfg["app_id"],
+        "databaseURL": "",
+    }
+    return pyrebase.initialize_app(config).auth()
 
 
 def _init_session() -> None:
-    for key in ("user", "session", "auth_error"):
+    for key in ("user", "auth_error"):
         if key not in st.session_state:
             st.session_state[key] = None
 
 
 def _do_login(email: str, password: str) -> None:
     try:
-        res = _supabase_client().auth.sign_in_with_password(
-            {"email": email, "password": password}
-        )
-        st.session_state.user = res.user
-        st.session_state.session = res.session
+        user = _firebase_auth().sign_in_with_email_and_password(email, password)
+        st.session_state.user = user
         st.session_state.auth_error = None
     except Exception as exc:
-        st.session_state.auth_error = str(exc)
+        msg = str(exc)
+        if "INVALID_PASSWORD" in msg or "EMAIL_NOT_FOUND" in msg or "INVALID_LOGIN_CREDENTIALS" in msg:
+            st.session_state.auth_error = "Invalid email or password."
+        else:
+            st.session_state.auth_error = "Login failed. Please try again."
 
 
 def _do_register(email: str, password: str) -> None:
     try:
-        res = _supabase_client().auth.sign_up(
-            {"email": email, "password": password}
-        )
-        if res.user and res.session:
-            st.session_state.user = res.user
-            st.session_state.session = res.session
-            st.session_state.auth_error = None
-        else:
-            st.session_state.auth_error = (
-                "Account created — check your email to confirm before logging in."
-            )
+        user = _firebase_auth().create_user_with_email_and_password(email, password)
+        st.session_state.user = user
+        st.session_state.auth_error = None
     except Exception as exc:
-        st.session_state.auth_error = str(exc)
+        msg = str(exc)
+        if "EMAIL_EXISTS" in msg:
+            st.session_state.auth_error = "An account with this email already exists."
+        elif "WEAK_PASSWORD" in msg:
+            st.session_state.auth_error = "Password must be at least 6 characters."
+        else:
+            st.session_state.auth_error = "Registration failed. Please try again."
 
 
 def _do_logout() -> None:
-    try:
-        _supabase_client().auth.sign_out()
-    except Exception:
-        pass
     st.session_state.user = None
-    st.session_state.session = None
     st.session_state.auth_error = None
 
 
@@ -442,7 +444,7 @@ def main() -> None:
 
     # Logout button in sidebar
     st.sidebar.divider()
-    st.sidebar.caption(f"Signed in as **{st.session_state.user.email}**")
+    st.sidebar.caption(f"Signed in as **{st.session_state.user['email']}**")
     if st.sidebar.button("Logout", use_container_width=True):
         _do_logout()
         st.rerun()
