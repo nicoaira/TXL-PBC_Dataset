@@ -163,6 +163,87 @@ def _deduct_credits(amount: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Stripe Payments
+# ---------------------------------------------------------------------------
+
+def _create_stripe_checkout(credits_to_buy: int, price_cents: int) -> None:
+    import stripe
+    try:
+        stripe.api_key = st.secrets["stripe"]["api_key"]
+    except KeyError:
+        st.error("Stripe is not configured.")
+        return
+
+    user = st.session_state.get("user")
+    if not user:
+        return
+
+    success_url = "http://localhost:8501/?session_id={CHECKOUT_SESSION_ID}"
+    cancel_url = "http://localhost:8501/"
+
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {
+                        "name": f"{credits_to_buy} Credits",
+                    },
+                    "unit_amount": price_cents,
+                },
+                "quantity": 1,
+            }],
+            mode="payment",
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={
+                "user_id": user["localId"],
+                "credits": str(credits_to_buy),
+            }
+        )
+        st.markdown(f'<meta http-equiv="refresh" content="0;url={session.url}">', unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Failed to create checkout session: {e}")
+
+
+def _check_stripe_payment() -> None:
+    session_id = st.query_params.get("session_id")
+    if not session_id:
+        return
+
+    import stripe
+    try:
+        stripe.api_key = st.secrets["stripe"]["api_key"]
+    except KeyError:
+        return
+
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+        if session.payment_status == "paid":
+            if session.metadata.get("processed") != "true":
+                user_id = session.metadata.get("user_id")
+                credits_to_add = int(session.metadata.get("credits", 0))
+
+                user = st.session_state.get("user")
+                if user and user.get("localId") == user_id:
+                    current = _get_user_credits(user["localId"], user["idToken"])
+                    new_bal = current + credits_to_add
+                    if _save_user_credits(user["localId"], user["idToken"], new_bal):
+                        st.session_state.credits = new_bal
+                        stripe.checkout.Session.modify(
+                            session_id,
+                            metadata={**session.metadata, "processed": "true"}
+                        )
+                        st.success(f"Payment successful! Added {credits_to_add} credits.")
+                        st.query_params.clear()
+                    else:
+                        st.error("Failed to add credits to your account. Please contact support.")
+    except Exception as e:
+        st.error(f"Error verifying payment: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Firebase auth — login / register / Google OAuth
 # ---------------------------------------------------------------------------
 
@@ -852,6 +933,8 @@ def main() -> None:
     if st.session_state.get("credits") is None:
         _refresh_credits()
 
+    _check_stripe_payment()
+
     # ---- Sidebar ----
     st.sidebar.divider()
     user_email = st.session_state.user.get("email", "")
@@ -867,6 +950,13 @@ def main() -> None:
     if col_b.button("Logout", use_container_width=True, key="logout_btn"):
         _do_logout()
         st.rerun()
+
+    st.sidebar.divider()
+    st.sidebar.subheader("Buy Credits")
+    if st.sidebar.button("Buy 100 Credits ($5)", use_container_width=True, type="primary"):
+        _create_stripe_checkout(100, 500)
+    if st.sidebar.button("Buy 500 Credits ($20)", use_container_width=True):
+        _create_stripe_checkout(500, 2000)
 
     # ---- Header ----
     st.title("TXL-PBC YOLO26 Blood-Cell Detector")
