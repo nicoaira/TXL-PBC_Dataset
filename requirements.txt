@@ -1,7 +1,8 @@
 ultralytics>=8.4.0
-Pillow
-PyYAML
+opencv-python-headless>=4.9.0
+Pillow>=10.0
+PyYAML>=6.0
+numpy>=1.24
 streamlit>=1.32
-numpy
 streamlit-webrtc>=0.47
 av>=11.0
