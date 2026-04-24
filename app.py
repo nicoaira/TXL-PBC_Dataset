@@ -163,6 +163,72 @@ def _deduct_credits(amount: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Admin — helpers
+# ---------------------------------------------------------------------------
+
+def _get_admin_emails() -> list[str]:
+    try:
+        val = st.secrets.get("app", {}).get("admin_emails", [])
+        if isinstance(val, str):
+            return [val]
+        return list(val)
+    except Exception:
+        return []
+
+
+def _is_admin() -> bool:
+    user = st.session_state.get("user")
+    if not user:
+        return False
+    return user.get("email", "") in _get_admin_emails()
+
+
+@st.cache_resource
+def _firebase_admin_app():
+    import firebase_admin
+    from firebase_admin import credentials
+
+    cfg = dict(st.secrets["firebase_admin"])
+    if "private_key" in cfg:
+        cfg["private_key"] = cfg["private_key"].replace("\\n", "\n")
+    cred = credentials.Certificate(cfg)
+    try:
+        return firebase_admin.get_app("txl_admin")
+    except ValueError:
+        return firebase_admin.initialize_app(cred, name="txl_admin")
+
+
+def _admin_list_users() -> list[dict[str, Any]]:
+    from firebase_admin import auth as fb_auth
+    from firebase_admin import firestore as fb_fs
+
+    app = _firebase_admin_app()
+    db = fb_fs.client(app=app)
+
+    users: list[dict[str, Any]] = []
+    page = fb_auth.list_users(app=app)
+    while page:
+        for u in page.users:
+            doc = db.collection("users").document(u.uid).get()
+            doc_data = doc.to_dict() if doc.exists else {}
+            users.append({
+                "uid": u.uid,
+                "email": u.email or "",
+                "credits": doc_data.get("credits", 0),
+            })
+        page = page.get_next_page()
+    return users
+
+
+def _admin_set_user_credits(uid: str, credits: int) -> None:
+    from firebase_admin import firestore as fb_fs
+
+    app = _firebase_admin_app()
+    db = fb_fs.client(app=app)
+    db.collection("users").document(uid).set({"credits": credits}, merge=True)
+
+
+# ---------------------------------------------------------------------------
 # Stripe Payments
 # ---------------------------------------------------------------------------
 
@@ -264,7 +330,12 @@ def _firebase_auth():
 
 
 def _init_session() -> None:
-    defaults: dict[str, Any] = {"user": None, "auth_error": None, "credits": None}
+    defaults: dict[str, Any] = {
+        "user": None,
+        "auth_error": None,
+        "credits": None,
+        "show_admin": False,
+    }
     for key, default in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = default
@@ -913,6 +984,108 @@ def mode_live(model: Any, names: list[str], settings: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Admin panel
+# ---------------------------------------------------------------------------
+
+def render_admin_panel() -> None:
+    if st.button("← Back to app", key="admin_back"):
+        st.session_state.show_admin = False
+        st.rerun()
+
+    st.title("Admin Panel")
+    st.caption("Manage users and credits.")
+
+    try:
+        st.secrets["firebase_admin"]
+    except KeyError:
+        st.error("Firebase Admin SDK is not configured in Streamlit secrets.")
+        st.info(
+            "Add a `[firebase_admin]` section to your Streamlit secrets "
+            "with your Firebase service account JSON. Get it from:\n\n"
+            "Firebase Console → Project Settings → Service accounts → "
+            "**Generate new private key**"
+        )
+        st.code(
+            '[firebase_admin]\ntype = "service_account"\nproject_id = "your-project-id"\n'
+            'private_key_id = "..."\nprivate_key = "-----BEGIN RSA PRIVATE KEY-----\\n..."\n'
+            'client_email = "firebase-adminsdk-xxx@your-project.iam.gserviceaccount.com"\n'
+            'client_id = "..."\nauth_uri = "https://accounts.google.com/o/oauth2/auth"\n'
+            'token_uri = "https://oauth2.googleapis.com/token"',
+            language="toml",
+        )
+        return
+
+    with st.spinner("Loading users…"):
+        try:
+            users = _admin_list_users()
+        except Exception as exc:
+            st.error(f"Failed to load users: {exc}")
+            return
+
+    # ---- Summary metrics ----
+    col1, col2 = st.columns(2)
+    col1.metric("Total users", len(users))
+    col2.metric("Total credits in circulation", sum(u.get("credits", 0) for u in users))
+
+    st.divider()
+
+    # ---- Users table ----
+    st.subheader("Users")
+    search = st.text_input("Filter by email", placeholder="user@example.com")
+    filtered = [u for u in users if search.lower() in u["email"].lower()] if search else users
+
+    admin_emails = _get_admin_emails()
+    display_rows = [
+        {
+            "Email": u["email"],
+            "Credits": u.get("credits", 0),
+            "Admin": "✓" if u["email"] in admin_emails else "",
+            "UID": u["uid"],
+        }
+        for u in sorted(filtered, key=lambda x: x["email"])
+    ]
+    st.dataframe(display_rows, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # ---- Credit editor ----
+    st.subheader("Edit Credits")
+    all_emails = sorted(u["email"] for u in users if u["email"])
+
+    if not all_emails:
+        st.info("No users yet.")
+        return
+
+    with st.form("admin_credit_form"):
+        selected_email = st.selectbox("User", options=all_emails)
+        action = st.radio(
+            "Action", ["Set to", "Add", "Subtract"], horizontal=True
+        )
+        amount = st.number_input(
+            "Credits", min_value=0, max_value=100_000, value=10, step=1
+        )
+        submitted = st.form_submit_button("Apply", type="primary")
+
+    if submitted:
+        match = next((u for u in users if u["email"] == selected_email), None)
+        if match:
+            current = match.get("credits", 0)
+            if action == "Set to":
+                new_credits = int(amount)
+            elif action == "Add":
+                new_credits = current + int(amount)
+            else:
+                new_credits = max(0, current - int(amount))
+            try:
+                _admin_set_user_credits(match["uid"], new_credits)
+                st.success(
+                    f"Updated **{selected_email}**: {current} → {new_credits} credits"
+                )
+            except Exception as exc:
+                st.error(f"Failed to update credits: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -957,6 +1130,18 @@ def main() -> None:
         _create_stripe_checkout(100, 500)
     if st.sidebar.button("Buy 500 Credits ($20)", use_container_width=True):
         _create_stripe_checkout(500, 2000)
+
+    if _is_admin():
+        st.sidebar.divider()
+        label = "← Back to App" if st.session_state.get("show_admin") else "Admin Panel"
+        if st.sidebar.button(label, use_container_width=True, key="admin_toggle"):
+            st.session_state.show_admin = not st.session_state.get("show_admin", False)
+            st.rerun()
+
+    # ---- Admin panel takes over the page ----
+    if st.session_state.get("show_admin") and _is_admin():
+        render_admin_panel()
+        st.stop()
 
     # ---- Header ----
     st.title("TXL-PBC YOLO26 Blood-Cell Detector")
