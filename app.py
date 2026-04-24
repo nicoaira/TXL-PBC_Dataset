@@ -7,6 +7,7 @@ Run with:
 from __future__ import annotations
 
 import io
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,12 @@ import numpy as np
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+INITIAL_CREDITS = 10  # free credits granted to every new user
 
 # ---------------------------------------------------------------------------
 # Firebase auth
@@ -79,6 +86,86 @@ div[data-testid="stForm"] button[kind="primaryFormSubmit"] {
 """
 
 
+# ---------------------------------------------------------------------------
+# Credit system — Firebase Firestore REST API
+# ---------------------------------------------------------------------------
+
+def _firestore_base_url() -> str:
+    project_id = st.secrets["firebase"]["project_id"]
+    return (
+        f"https://firestore.googleapis.com/v1/projects/{project_id}"
+        "/databases/(default)/documents"
+    )
+
+
+def _get_user_credits(user_id: str, id_token: str) -> int:
+    import requests
+    url = f"{_firestore_base_url()}/users/{user_id}"
+    try:
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {id_token}"},
+            timeout=10,
+        )
+    except Exception:
+        return st.session_state.get("credits") or 0
+
+    if resp.status_code == 404:
+        _save_user_credits(user_id, id_token, INITIAL_CREDITS)
+        return INITIAL_CREDITS
+    if resp.status_code != 200:
+        return st.session_state.get("credits") or 0
+
+    data = resp.json()
+    val = data.get("fields", {}).get("credits", {}).get("integerValue")
+    return int(val) if val is not None else INITIAL_CREDITS
+
+
+def _save_user_credits(user_id: str, id_token: str, credits: int) -> bool:
+    import requests
+    url = f"{_firestore_base_url()}/users/{user_id}?updateMask.fieldPaths=credits"
+    payload = {"fields": {"credits": {"integerValue": str(credits)}}}
+    try:
+        resp = requests.patch(
+            url,
+            json=payload,
+            headers={"Authorization": f"Bearer {id_token}"},
+            timeout=10,
+        )
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def _refresh_credits() -> None:
+    user = st.session_state.get("user")
+    if not user:
+        st.session_state.credits = 0
+        return
+    st.session_state.credits = _get_user_credits(
+        user.get("localId", ""), user.get("idToken", "")
+    )
+
+
+def _deduct_credits(amount: int) -> bool:
+    """Deduct credits from the current user. Returns False if balance is insufficient."""
+    user = st.session_state.get("user")
+    if not user:
+        return False
+    current = st.session_state.get("credits") or 0
+    if current < amount:
+        return False
+    new_bal = current - amount
+    ok = _save_user_credits(user["localId"], user["idToken"], new_bal)
+    if ok:
+        st.session_state.credits = new_bal
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# Firebase auth — login / register / Google OAuth
+# ---------------------------------------------------------------------------
+
 @st.cache_resource
 def _firebase_auth():
     import pyrebase
@@ -96,9 +183,10 @@ def _firebase_auth():
 
 
 def _init_session() -> None:
-    for key in ("user", "auth_error"):
+    defaults: dict[str, Any] = {"user": None, "auth_error": None, "credits": None}
+    for key, default in defaults.items():
         if key not in st.session_state:
-            st.session_state[key] = None
+            st.session_state[key] = default
 
 
 def _do_login(email: str, password: str) -> None:
@@ -106,6 +194,7 @@ def _do_login(email: str, password: str) -> None:
         user = _firebase_auth().sign_in_with_email_and_password(email, password)
         st.session_state.user = user
         st.session_state.auth_error = None
+        _refresh_credits()
     except Exception as exc:
         msg = str(exc)
         if any(k in msg for k in ("INVALID_PASSWORD", "EMAIL_NOT_FOUND", "INVALID_LOGIN_CREDENTIALS")):
@@ -119,6 +208,7 @@ def _do_register(email: str, password: str) -> None:
         user = _firebase_auth().create_user_with_email_and_password(email, password)
         st.session_state.user = user
         st.session_state.auth_error = None
+        _refresh_credits()
     except Exception as exc:
         msg = str(exc)
         if "EMAIL_EXISTS" in msg:
@@ -184,6 +274,7 @@ def _do_google_signin() -> None:
                     "displayName": data.get("displayName", ""),
                 }
                 st.session_state.auth_error = None
+                _refresh_credits()
                 st.rerun()
         except Exception as exc:
             st.session_state.auth_error = f"Google sign-in error: {exc}"
@@ -192,6 +283,7 @@ def _do_google_signin() -> None:
 def _do_logout() -> None:
     st.session_state.user = None
     st.session_state.auth_error = None
+    st.session_state.credits = None
 
 
 def render_auth_page() -> None:
@@ -237,6 +329,11 @@ def render_auth_page() -> None:
         st.markdown('<div class="auth-divider">or</div>', unsafe_allow_html=True)
         _do_google_signin()
         st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
 
 DEFAULT_MODEL_PATH = Path("runs/yolo26/txl_pbc_yolo26m2/weights/best.pt")
 FALLBACK_MODEL_PATH = Path("runs/yolo26/txl_pbc_yolo26m/weights/best.pt")
@@ -429,31 +526,44 @@ def sidebar_controls() -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Detection modes
+# ---------------------------------------------------------------------------
+
+def _credits_warning(needed: int) -> bool:
+    """Show error and return True if the user cannot afford `needed` credits."""
+    available = st.session_state.get("credits") or 0
+    if available < needed:
+        st.error(
+            f"Not enough credits. You need **{needed}** but have **{available}**. "
+            "Contact support to get more credits."
+        )
+        return True
+    return False
+
+
 def mode_camera(model: Any, names: list[str], settings: dict[str, Any]) -> None:
     st.subheader("Camera snapshot")
-    st.caption(
-        "Allow camera access in your browser, take a photo, and the model will "
-        "annotate detections."
-    )
+    st.caption("Cost: **1 credit** per snapshot.")
+
     snapshot = st.camera_input("Take a photo")
     if snapshot is None:
         return
+
+    if _credits_warning(1):
+        return
+
+    if not _deduct_credits(1):
+        st.error("Could not deduct credits. Please refresh and try again.")
+        return
+
     image = Image.open(snapshot).convert("RGB")
     detections = run_inference(
-        model,
-        image,
-        imgsz=settings["imgsz"],
-        conf=settings["conf"],
-        iou=settings["iou"],
-        device=settings["device"],
+        model, image,
+        imgsz=settings["imgsz"], conf=settings["conf"],
+        iou=settings["iou"], device=settings["device"],
     )
-    annotated = draw_detections(
-        image,
-        detections["boxes"],
-        detections["confs"],
-        detections["classes"],
-        names,
-    )
+    annotated = draw_detections(image, detections["boxes"], detections["confs"], detections["classes"], names)
     left, right = st.columns(2)
     left.image(image, caption="Snapshot", use_container_width=True)
     right.image(annotated, caption="Predictions", use_container_width=True)
@@ -466,8 +576,10 @@ def mode_camera(model: Any, names: list[str], settings: dict[str, Any]) -> None:
     )
 
 
-def mode_upload(model: Any, names: list[str], settings: dict[str, Any]) -> None:
+def mode_upload_image(model: Any, names: list[str], settings: dict[str, Any]) -> None:
     st.subheader("Upload image")
+    st.caption("Cost: **1 credit** per image.")
+
     uploaded = st.file_uploader(
         "Choose an image",
         type=["png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"],
@@ -475,22 +587,26 @@ def mode_upload(model: Any, names: list[str], settings: dict[str, Any]) -> None:
     )
     if uploaded is None:
         return
+
     image = Image.open(uploaded).convert("RGB")
+    st.image(image, caption="Uploaded image", use_container_width=True)
+
+    if _credits_warning(1):
+        return
+
+    if not st.button("Run inference (1 credit)", type="primary", key="run_image"):
+        return
+
+    if not _deduct_credits(1):
+        st.error("Could not deduct credits. Please refresh and try again.")
+        return
+
     detections = run_inference(
-        model,
-        image,
-        imgsz=settings["imgsz"],
-        conf=settings["conf"],
-        iou=settings["iou"],
-        device=settings["device"],
+        model, image,
+        imgsz=settings["imgsz"], conf=settings["conf"],
+        iou=settings["iou"], device=settings["device"],
     )
-    annotated = draw_detections(
-        image,
-        detections["boxes"],
-        detections["confs"],
-        detections["classes"],
-        names,
-    )
+    annotated = draw_detections(image, detections["boxes"], detections["confs"], detections["classes"], names)
     left, right = st.columns(2)
     left.image(image, caption="Original", use_container_width=True)
     right.image(annotated, caption="Predictions", use_container_width=True)
@@ -503,12 +619,130 @@ def mode_upload(model: Any, names: list[str], settings: dict[str, Any]) -> None:
     )
 
 
+def mode_upload_video(model: Any, names: list[str], settings: dict[str, Any]) -> None:
+    st.subheader("Upload video")
+    st.caption("Cost: **1 credit per second** of video duration.")
+
+    uploaded = st.file_uploader(
+        "Choose a video",
+        type=["mp4", "avi", "mov", "mkv", "webm"],
+        accept_multiple_files=False,
+    )
+    if uploaded is None:
+        return
+
+    try:
+        import av
+    except ImportError:
+        st.error("Video mode requires `av`. It should be installed via requirements.txt.")
+        return
+
+    video_bytes = uploaded.read()
+
+    try:
+        with av.open(io.BytesIO(video_bytes)) as container:
+            v_stream = container.streams.video[0]
+            if v_stream.duration and v_stream.time_base:
+                duration_secs = float(v_stream.duration * v_stream.time_base)
+            elif container.duration:
+                duration_secs = float(container.duration) / 1_000_000
+            else:
+                duration_secs = None
+            fps = float(v_stream.average_rate) if v_stream.average_rate else 25.0
+    except Exception as exc:
+        st.error(f"Could not read video metadata: {exc}")
+        return
+
+    if duration_secs is None or duration_secs <= 0:
+        st.warning("Could not determine video duration.")
+        return
+
+    credits_needed = max(1, int(duration_secs))
+    available = st.session_state.get("credits") or 0
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Duration", f"{duration_secs:.1f}s")
+    col2.metric("Cost", f"{credits_needed} credits")
+    col3.metric("Your balance", f"{available} credits")
+
+    if _credits_warning(credits_needed):
+        return
+
+    if not st.button(f"Run inference on video ({credits_needed} credits)", type="primary", key="run_video"):
+        return
+
+    if not _deduct_credits(credits_needed):
+        st.error("Could not deduct credits. Please refresh and try again.")
+        return
+
+    # Sample at 2 fps to keep processing time reasonable
+    sample_fps = min(2.0, fps)
+    frame_interval = max(1, int(fps / sample_fps))
+
+    progress = st.progress(0.0, text="Processing video…")
+    annotated_frames: list[Image.Image] = []
+    total_counts: dict[str, int] = {name: 0 for name in names}
+    processed = 0
+
+    try:
+        with av.open(io.BytesIO(video_bytes)) as container:
+            all_frames = list(container.decode(video=0))
+            total_frames = len(all_frames)
+            sample_indices = set(range(0, total_frames, frame_interval))
+
+            for i, frame in enumerate(all_frames):
+                if i not in sample_indices:
+                    continue
+                pil_frame = frame.to_image().convert("RGB")
+                detections = run_inference(
+                    model, pil_frame,
+                    imgsz=settings["imgsz"], conf=settings["conf"],
+                    iou=settings["iou"], device=settings["device"],
+                )
+                annotated = draw_detections(
+                    pil_frame,
+                    detections["boxes"], detections["confs"],
+                    detections["classes"], names,
+                )
+                annotated_frames.append(annotated)
+                for cls_id in detections["classes"]:
+                    if 0 <= cls_id < len(names):
+                        total_counts[names[cls_id]] += 1
+                processed += 1
+                progress.progress(
+                    min(1.0, (i + 1) / max(1, total_frames)),
+                    text=f"Frame {i + 1}/{total_frames}…",
+                )
+    except Exception as exc:
+        st.error(f"Error during video processing: {exc}")
+        return
+
+    progress.empty()
+    st.success(f"Done. Analysed {processed} sampled frames from {duration_secs:.1f}s of video.")
+
+    total = sum(total_counts.values())
+    st.metric("Total detections (all sampled frames)", total)
+    if total:
+        cols = st.columns(len(names))
+        for col, name in zip(cols, names, strict=False):
+            col.metric(name, total_counts[name])
+
+    if annotated_frames:
+        st.subheader("Sample annotated frames")
+        show = annotated_frames[::max(1, len(annotated_frames) // 8)][:8]
+        cols = st.columns(min(4, len(show)))
+        for col, frame in zip(cols * 2, show, strict=False):
+            col.image(frame, use_container_width=True)
+
+
 def mode_live(model: Any, names: list[str], settings: dict[str, Any]) -> None:
     st.subheader("Live webcam (WebRTC)")
-    st.caption(
-        "Streams frames from your browser camera through WebRTC and runs the "
-        "model on each frame. Lower image size for smoother framerates."
-    )
+    st.caption("Cost: **1 credit per second** of streaming. Credits are deducted as you stream.")
+
+    if (st.session_state.get("credits") or 0) < 1:
+        st.error("You have no credits left. You need at least 1 credit to start streaming.")
+        return
+
     try:
         import av  # noqa: F401
         from streamlit_webrtc import VideoTransformerBase, webrtc_streamer
@@ -523,6 +757,11 @@ def mode_live(model: Any, names: list[str], settings: dict[str, Any]) -> None:
     conf = settings["conf"]
     iou = settings["iou"]
     device = settings["device"]
+
+    # Initialise live-stream credit tracking in session state
+    for key in ("live_credit_start", "live_credits_deducted"):
+        if key not in st.session_state:
+            st.session_state[key] = None if key == "live_credit_start" else 0
 
     class Transformer(VideoTransformerBase):
         def __init__(self) -> None:
@@ -557,12 +796,44 @@ def mode_live(model: Any, names: list[str], settings: dict[str, Any]) -> None:
             )
             return np.asarray(annotated)[:, :, ::-1]
 
-    webrtc_streamer(
+    webrtc_ctx = webrtc_streamer(
         key="txl-pbc-live",
         video_transformer_factory=Transformer,
         media_stream_constraints={"video": True, "audio": False},
     )
 
+    # Deduct credits based on elapsed wall-clock time (runs on each Streamlit rerun)
+    if webrtc_ctx.state.playing:
+        now = time.time()
+        if st.session_state.live_credit_start is None:
+            st.session_state.live_credit_start = now
+            st.session_state.live_credits_deducted = 0
+        else:
+            elapsed = now - st.session_state.live_credit_start
+            to_deduct = int(elapsed) - st.session_state.live_credits_deducted
+            if to_deduct > 0:
+                if _deduct_credits(to_deduct):
+                    st.session_state.live_credits_deducted += to_deduct
+                else:
+                    st.error("Out of credits! Please stop the stream.")
+
+        elapsed_total = time.time() - st.session_state.live_credit_start
+        remaining = st.session_state.get("credits") or 0
+        st.info(
+            f"🔴 Streaming · {int(elapsed_total)}s elapsed · "
+            f"{st.session_state.live_credits_deducted} credits used · "
+            f"{remaining} credits remaining"
+        )
+    else:
+        if st.session_state.live_credit_start is not None:
+            # Stream stopped — reset tracking
+            st.session_state.live_credit_start = None
+            st.session_state.live_credits_deducted = 0
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main() -> None:
     st.set_page_config(
@@ -577,13 +848,27 @@ def main() -> None:
         render_auth_page()
         st.stop()
 
-    # Logout button in sidebar
+    # Load credits once per session after login
+    if st.session_state.get("credits") is None:
+        _refresh_credits()
+
+    # ---- Sidebar ----
     st.sidebar.divider()
-    st.sidebar.caption(f"Signed in as **{st.session_state.user['email']}**")
-    if st.sidebar.button("Logout", use_container_width=True):
+    user_email = st.session_state.user.get("email", "")
+    st.sidebar.caption(f"Signed in as **{user_email}**")
+
+    credits = st.session_state.get("credits") or 0
+    st.sidebar.metric("Credits", credits)
+
+    col_a, col_b = st.sidebar.columns(2)
+    if col_a.button("Refresh", use_container_width=True, key="refresh_credits"):
+        _refresh_credits()
+        st.rerun()
+    if col_b.button("Logout", use_container_width=True, key="logout_btn"):
         _do_logout()
         st.rerun()
 
+    # ---- Header ----
     st.title("TXL-PBC YOLO26 Blood-Cell Detector")
     st.caption(
         "Real-time WBC / RBC / Platelet detection powered by the fine-tuned "
@@ -610,16 +895,18 @@ def main() -> None:
 
     mode = st.radio(
         "Input source",
-        options=("Camera snapshot", "Live webcam", "Upload image"),
+        options=("Camera snapshot", "Upload image", "Upload video", "Live webcam"),
         horizontal=True,
     )
 
     if mode == "Camera snapshot":
         mode_camera(model, names, settings)
-    elif mode == "Live webcam":
-        mode_live(model, names, settings)
+    elif mode == "Upload image":
+        mode_upload_image(model, names, settings)
+    elif mode == "Upload video":
+        mode_upload_video(model, names, settings)
     else:
-        mode_upload(model, names, settings)
+        mode_live(model, names, settings)
 
 
 if __name__ == "__main__":
