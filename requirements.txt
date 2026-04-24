@@ -1,3 +1,7 @@
 ultralytics>=8.4.0
 Pillow
 PyYAML
+streamlit>=1.32
+numpy
+streamlit-webrtc>=0.47
+av>=11.0
