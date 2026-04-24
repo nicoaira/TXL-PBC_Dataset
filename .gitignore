@@ -1,5 +1,6 @@
 runs/
 *.pt
+.streamlit/secrets.toml
 *.onnx
 *.engine
 *.torchscript

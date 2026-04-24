@@ -14,6 +14,93 @@ import numpy as np
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
+
+# ---------------------------------------------------------------------------
+# Supabase auth
+# ---------------------------------------------------------------------------
+
+@st.cache_resource
+def _supabase_client():
+    from supabase import create_client
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
+
+
+def _init_session() -> None:
+    for key in ("user", "session", "auth_error"):
+        if key not in st.session_state:
+            st.session_state[key] = None
+
+
+def _do_login(email: str, password: str) -> None:
+    try:
+        res = _supabase_client().auth.sign_in_with_password(
+            {"email": email, "password": password}
+        )
+        st.session_state.user = res.user
+        st.session_state.session = res.session
+        st.session_state.auth_error = None
+    except Exception as exc:
+        st.session_state.auth_error = str(exc)
+
+
+def _do_register(email: str, password: str) -> None:
+    try:
+        res = _supabase_client().auth.sign_up(
+            {"email": email, "password": password}
+        )
+        if res.user and res.session:
+            st.session_state.user = res.user
+            st.session_state.session = res.session
+            st.session_state.auth_error = None
+        else:
+            st.session_state.auth_error = (
+                "Account created — check your email to confirm before logging in."
+            )
+    except Exception as exc:
+        st.session_state.auth_error = str(exc)
+
+
+def _do_logout() -> None:
+    try:
+        _supabase_client().auth.sign_out()
+    except Exception:
+        pass
+    st.session_state.user = None
+    st.session_state.session = None
+    st.session_state.auth_error = None
+
+
+def render_auth_page() -> None:
+    st.title("TXL-PBC YOLO26 — Sign in")
+    tab_login, tab_register = st.tabs(["Login", "Register"])
+
+    with tab_login:
+        with st.form("login_form"):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login", use_container_width=True)
+        if submitted:
+            _do_login(email, password)
+            st.rerun()
+
+    with tab_register:
+        with st.form("register_form"):
+            email = st.text_input("Email", key="reg_email")
+            password = st.text_input("Password", type="password", key="reg_pw")
+            password2 = st.text_input("Confirm password", type="password", key="reg_pw2")
+            submitted = st.form_submit_button("Create account", use_container_width=True)
+        if submitted:
+            if password != password2:
+                st.session_state.auth_error = "Passwords do not match."
+            else:
+                _do_register(email, password)
+                st.rerun()
+
+    if st.session_state.auth_error:
+        st.error(st.session_state.auth_error)
+
 DEFAULT_MODEL_PATH = Path("runs/yolo26/txl_pbc_yolo26m2/weights/best.pt")
 FALLBACK_MODEL_PATH = Path("runs/yolo26/txl_pbc_yolo26m/weights/best.pt")
 CLASS_NAMES = ["WBC", "RBC", "Platelets"]
@@ -346,6 +433,20 @@ def main() -> None:
         page_icon=":microscope:",
         layout="wide",
     )
+
+    _init_session()
+
+    if not st.session_state.user:
+        render_auth_page()
+        st.stop()
+
+    # Logout button in sidebar
+    st.sidebar.divider()
+    st.sidebar.caption(f"Signed in as **{st.session_state.user.email}**")
+    if st.sidebar.button("Logout", use_container_width=True):
+        _do_logout()
+        st.rerun()
+
     st.title("TXL-PBC YOLO26 Blood-Cell Detector")
     st.caption(
         "Real-time WBC / RBC / Platelet detection powered by the fine-tuned "
