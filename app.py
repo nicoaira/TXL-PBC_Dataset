@@ -98,7 +98,35 @@ def _firestore_base_url() -> str:
     )
 
 
+def _get_admin_firestore_client():
+    try:
+        _ = st.secrets["firebase_admin"]
+    except KeyError:
+        return None
+
+    try:
+        from firebase_admin import firestore as fb_fs
+
+        return fb_fs.client(app=_firebase_admin_app())
+    except Exception:
+        return None
+
+
 def _get_user_credits(user_id: str, id_token: str) -> int:
+    admin_db = _get_admin_firestore_client()
+    if admin_db is not None:
+        doc_ref = admin_db.collection("users").document(user_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            doc_ref.set({"credits": INITIAL_CREDITS}, merge=True)
+            return INITIAL_CREDITS
+
+        credits = (doc.to_dict() or {}).get("credits")
+        if credits is None:
+            doc_ref.set({"credits": INITIAL_CREDITS}, merge=True)
+            return INITIAL_CREDITS
+        return int(credits)
+
     import requests
     url = f"{_firestore_base_url()}/users/{user_id}"
     try:
@@ -122,6 +150,13 @@ def _get_user_credits(user_id: str, id_token: str) -> int:
 
 
 def _save_user_credits(user_id: str, id_token: str, credits: int) -> bool:
+    admin_db = _get_admin_firestore_client()
+    if admin_db is not None:
+        admin_db.collection("users").document(user_id).set(
+            {"credits": int(credits)}, merge=True
+        )
+        return True
+
     import requests
     url = f"{_firestore_base_url()}/users/{user_id}?updateMask.fieldPaths=credits"
     payload = {"fields": {"credits": {"integerValue": str(credits)}}}
@@ -1078,6 +1113,9 @@ def render_admin_panel() -> None:
                 new_credits = max(0, current - int(amount))
             try:
                 _admin_set_user_credits(match["uid"], new_credits)
+                current_user = st.session_state.get("user") or {}
+                if current_user.get("localId") == match["uid"]:
+                    st.session_state.credits = new_credits
                 st.success(
                     f"Updated **{selected_email}**: {current} → {new_credits} credits"
                 )
