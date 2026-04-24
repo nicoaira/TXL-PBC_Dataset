@@ -129,64 +129,99 @@ def _do_register(email: str, password: str) -> None:
             st.session_state.auth_error = "Registration failed. Please try again."
 
 
-def _do_google_signin() -> None:
-    import requests
-    try:
-        from streamlit_oauth import OAuth2Component
-    except ImportError:
-        st.session_state.auth_error = "streamlit-oauth not installed."
-        return
-
+def _google_auth_url() -> str:
+    import urllib.parse
     try:
         g = st.secrets["google"]
         redirect_uri = st.secrets.get("app", {}).get("redirect_uri", "http://localhost:8501")
     except KeyError:
-        st.warning("Google sign-in is not configured yet.")
+        return ""
+    params = {
+        "client_id": g["client_id"],
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "select_account",
+    }
+    return "https://accounts.google.com/o/oauth2/auth?" + urllib.parse.urlencode(params)
+
+
+def _handle_google_callback() -> None:
+    import requests
+    code = st.query_params.get("code")
+    if not code:
+        return
+    try:
+        g = st.secrets["google"]
+        redirect_uri = st.secrets.get("app", {}).get("redirect_uri", "http://localhost:8501")
+    except KeyError:
         return
 
-    oauth2 = OAuth2Component(
-        client_id=g["client_id"],
-        client_secret=g["client_secret"],
-        authorize_endpoint="https://accounts.google.com/o/oauth2/auth",
-        token_endpoint="https://oauth2.googleapis.com/token",
-        refresh_token_endpoint="https://oauth2.googleapis.com/token",
-        revoke_token_endpoint="https://oauth2.googleapis.com/revoke",
-    )
-    result = oauth2.authorize_button(
-        name="Continue with Google",
-        redirect_uri=redirect_uri,
-        scope="openid email profile",
-        key="google_oauth",
-        icon="https://www.google.com/favicon.ico",
-        use_container_width=True,
-        extras_params={"prompt": "select_account"},
-    )
-    if result and "token" in result:
-        id_token = result["token"].get("id_token", "")
-        api_key = st.secrets["firebase"]["api_key"]
-        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={api_key}"
-        payload = {
+    # Exchange code for tokens
+    token_resp = requests.post("https://oauth2.googleapis.com/token", data={
+        "code": code,
+        "client_id": g["client_id"],
+        "client_secret": g["client_secret"],
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }, timeout=10)
+    tokens = token_resp.json()
+    id_token = tokens.get("id_token", "")
+    if not id_token:
+        st.session_state.auth_error = "Google sign-in failed: no ID token returned."
+        st.query_params.clear()
+        return
+
+    # Exchange ID token with Firebase
+    api_key = st.secrets["firebase"]["api_key"]
+    fb_resp = requests.post(
+        f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={api_key}",
+        json={
             "postBody": f"id_token={id_token}&providerId=google.com",
             "requestUri": redirect_uri,
             "returnSecureToken": True,
-            "returnIdpCredential": True,
+        },
+        timeout=10,
+    )
+    data = fb_resp.json()
+    st.query_params.clear()
+    if "error" in data:
+        st.session_state.auth_error = data["error"].get("message", "Google sign-in failed.")
+    else:
+        st.session_state.user = {
+            "email": data.get("email"),
+            "localId": data.get("localId"),
+            "idToken": data.get("idToken"),
+            "displayName": data.get("displayName", ""),
         }
-        try:
-            resp = requests.post(url, json=payload, timeout=10)
-            data = resp.json()
-            if "error" in data:
-                st.session_state.auth_error = data["error"].get("message", "Google sign-in failed.")
-            else:
-                st.session_state.user = {
-                    "email": data.get("email"),
-                    "localId": data.get("localId"),
-                    "idToken": data.get("idToken"),
-                    "displayName": data.get("displayName", ""),
-                }
-                st.session_state.auth_error = None
-                st.rerun()
-        except Exception as exc:
-            st.session_state.auth_error = f"Google sign-in error: {exc}"
+        st.session_state.auth_error = None
+    st.rerun()
+
+
+def _render_google_button() -> None:
+    url = _google_auth_url()
+    if not url:
+        return
+    st.markdown(
+        f"""
+        <a href="{url}" target="_self" style="text-decoration:none;">
+          <div style="
+            display:flex; align-items:center; justify-content:center; gap:10px;
+            background:#fff; color:#3c4043; border:1px solid #dadce0;
+            border-radius:8px; padding:10px 16px; font-size:0.95rem;
+            font-weight:500; cursor:pointer; width:100%;
+            font-family:'Google Sans',sans-serif;
+            transition: box-shadow 0.2s;
+          ">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg"
+                 width="20" height="20"/>
+            Continue with Google
+          </div>
+        </a>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _do_logout() -> None:
@@ -235,7 +270,7 @@ def render_auth_page() -> None:
             st.error(st.session_state.auth_error)
 
         st.markdown('<div class="auth-divider">or</div>', unsafe_allow_html=True)
-        _do_google_signin()
+        _render_google_button()
         st.markdown('</div>', unsafe_allow_html=True)
 
 DEFAULT_MODEL_PATH = Path("runs/yolo26/txl_pbc_yolo26m2/weights/best.pt")
@@ -572,6 +607,7 @@ def main() -> None:
     )
 
     _init_session()
+    _handle_google_callback()
 
     if not st.session_state.user:
         render_auth_page()
