@@ -9,3 +9,6 @@ __pycache__/
 wbc/
 Raabin-WBC/
 .streamlit/
+wbc_detection_finetuning/*
+wbc_reviewed/*
+finetune_dataset/*
