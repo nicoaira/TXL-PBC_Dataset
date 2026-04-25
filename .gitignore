@@ -1,5 +1,6 @@
 runs/
 *.pt
+!models/*.pt
 .streamlit/secrets.toml
 *.onnx
 *.engine
