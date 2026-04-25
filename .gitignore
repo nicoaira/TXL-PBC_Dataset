@@ -1,5 +1,8 @@
 runs/
 *.pt
+!models/*.pt
+.streamlit/secrets.toml
+.streamlit/
 *.onnx
 *.engine
 *.torchscript
@@ -8,7 +11,11 @@ __pycache__/
 *.pyc
 wbc/
 Raabin-WBC/
-.streamlit/
-wbc_detection_finetuning/*
-wbc_reviewed/*
-finetune_dataset/*
+wbc_detection_finetuning/
+wbc_reviewed/
+finetune_dataset*
+finetune_granular_dataset/
+finetune_v2_dataset/*
+finetune_v2_dataset_src/*
+cvat_review/*
+.claude/scheduled_tasks.lock
