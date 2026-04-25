@@ -10,3 +10,5 @@ __pycache__/
 wbc_detection_finetuning/
 Raabin-WBC/
 wbc/
+finetune_dataset*
+wbc_reviewed

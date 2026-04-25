@@ -626,8 +626,8 @@ def render_auth_page() -> None:
 # Model
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL_PATH = Path("runs/yolo26/txl_pbc_yolo26m2/weights/best.pt")
-FALLBACK_MODEL_PATH = Path("runs/yolo26/txl_pbc_yolo26m/weights/best.pt")
+DEFAULT_MODEL_PATH = Path("runs/finetune/wbc_reviewed_ft/weights/best_finetune_2.pt")
+FALLBACK_MODEL_PATH = Path("runs/yolo26/txl_pbc_yolo26m2/weights/best.pt")
 CLASS_NAMES = ["WBC", "RBC", "Platelets"]
 CLASS_COLORS = {
     "WBC": (22, 163, 74),
