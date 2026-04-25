@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -909,6 +910,77 @@ def mode_upload_image(model: Any, names: list[str], settings: dict[str, Any]) ->
     )
 
 
+def mode_batch_images(model: Any, names: list[str], settings: dict[str, Any]) -> None:
+    st.subheader("Batch images")
+    st.caption("Cost: **1 credit** per image.")
+
+    uploaded_files = st.file_uploader(
+        "Choose images",
+        type=["png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"],
+        accept_multiple_files=True,
+    )
+    if not uploaded_files:
+        return
+
+    n = len(uploaded_files)
+    st.info(f"{n} image{'s' if n != 1 else ''} selected — costs **{n} credit{'s' if n != 1 else ''}**.")
+
+    if _credits_warning(n):
+        return
+
+    if not st.button(f"Run inference on {n} image{'s' if n != 1 else ''} ({n} credits)", type="primary", key="run_batch"):
+        return
+
+    if not _deduct_credits(n):
+        st.error("Could not deduct credits. Please refresh and try again.")
+        return
+
+    zip_buffer = io.BytesIO()
+    total_counts: dict[str, int] = {name: 0 for name in names}
+    total_detections = 0
+
+    progress = st.progress(0.0, text="Processing…")
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, uploaded in enumerate(uploaded_files):
+            image = Image.open(uploaded).convert("RGB")
+            detections = run_inference(
+                model, image,
+                imgsz=settings["imgsz"], conf=settings["conf"],
+                iou=settings["iou"], device=settings["device"],
+            )
+            annotated = draw_detections(
+                image, detections["boxes"], detections["confs"], detections["classes"], names
+            )
+            for cls_id in detections["classes"]:
+                if 0 <= cls_id < len(names):
+                    total_counts[names[cls_id]] += 1
+            total_detections += len(detections["boxes"])
+
+            out_name = f"{Path(uploaded.name).stem}_pred.png"
+            zf.writestr(out_name, image_to_png_bytes(annotated))
+
+            with st.expander(f"{uploaded.name} — {len(detections['boxes'])} detection(s)", expanded=False):
+                left, right = st.columns(2)
+                left.image(image, caption="Original", use_container_width=True)
+                right.image(annotated, caption="Predictions", use_container_width=True)
+
+            progress.progress((i + 1) / n, text=f"{i + 1}/{n} processed…")
+
+    progress.empty()
+
+    st.success(f"Done. {total_detections} total detections across {n} images.")
+    cols = st.columns(len(names))
+    for col, name in zip(cols, names, strict=False):
+        col.metric(name, total_counts.get(name, 0))
+
+    st.download_button(
+        "Download all annotated images (ZIP)",
+        data=zip_buffer.getvalue(),
+        file_name="batch_predictions.zip",
+        mime="application/zip",
+    )
+
+
 def mode_upload_video(model: Any, names: list[str], settings: dict[str, Any]) -> None:
     st.subheader("Upload video")
     st.caption("Cost: **1 credit per second** of video duration.")
@@ -1312,7 +1384,7 @@ def main() -> None:
 
     mode = st.radio(
         "Input source",
-        options=("Camera snapshot", "Upload image", "Upload video", "Live webcam"),
+        options=("Camera snapshot", "Upload image", "Batch images", "Upload video", "Live webcam"),
         horizontal=True,
     )
 
@@ -1320,6 +1392,8 @@ def main() -> None:
         mode_camera(model, names, settings)
     elif mode == "Upload image":
         mode_upload_image(model, names, settings)
+    elif mode == "Batch images":
+        mode_batch_images(model, names, settings)
     elif mode == "Upload video":
         mode_upload_video(model, names, settings)
     else:

@@ -7,3 +7,6 @@ runs/
 *.mlpackage/
 __pycache__/
 *.pyc
+wbc_detection_finetuning/
+Raabin-WBC/
+wbc/
