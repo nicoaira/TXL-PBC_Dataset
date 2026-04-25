@@ -787,6 +787,50 @@ def image_to_png_bytes(image: Image.Image) -> bytes:
     return buffer.getvalue()
 
 
+def _yolo_label_txt(
+    detections: dict[str, Any],
+    img_w: int,
+    img_h: int,
+) -> str:
+    lines = []
+    for box, cls_id in zip(detections["boxes"], detections["classes"], strict=False):
+        x1, y1, x2, y2 = box
+        cx = ((x1 + x2) / 2) / img_w
+        cy = ((y1 + y2) / 2) / img_h
+        w = (x2 - x1) / img_w
+        h = (y2 - y1) / img_h
+        lines.append(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+    return "\n".join(lines)
+
+
+def make_training_export_zip(
+    entries: list[tuple[str, Image.Image, dict[str, Any]]],
+    names: list[str],
+) -> bytes:
+    """Build a YOLO-format training ZIP.
+
+    entries: list of (original_filename, PIL image, detections dict)
+    """
+    buf = io.BytesIO()
+    yaml_body = (
+        f"nc: {len(names)}\n"
+        f"names: {names}\n"
+    )
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("classes.txt", "\n".join(names))
+        zf.writestr("data.yaml", yaml_body)
+        for orig_name, image, detections in entries:
+            stem = Path(orig_name).stem
+            img_w, img_h = image.size
+            # original image
+            img_bytes = io.BytesIO()
+            image.save(img_bytes, format="PNG")
+            zf.writestr(f"images/{stem}.png", img_bytes.getvalue())
+            # YOLO label
+            zf.writestr(f"labels/{stem}.txt", _yolo_label_txt(detections, img_w, img_h))
+    return buf.getvalue()
+
+
 def sidebar_controls() -> dict[str, Any]:
     st.sidebar.header("Model")
     default_path = str(DEFAULT_MODEL_PATH)
@@ -902,11 +946,18 @@ def mode_upload_image(model: Any, names: list[str], settings: dict[str, Any]) ->
     left.image(image, caption="Original", use_container_width=True)
     right.image(annotated, caption="Predictions", use_container_width=True)
     render_detection_summary(detections, names)
-    st.download_button(
+    col1, col2 = st.columns(2)
+    col1.download_button(
         "Download annotated image",
         data=image_to_png_bytes(annotated),
         file_name=f"{Path(uploaded.name).stem}_pred.png",
         mime="image/png",
+    )
+    col2.download_button(
+        "Export for training (YOLO)",
+        data=make_training_export_zip([(uploaded.name, image, detections)], names),
+        file_name=f"{Path(uploaded.name).stem}_yolo_export.zip",
+        mime="application/zip",
     )
 
 
@@ -936,11 +987,18 @@ def mode_batch_images(model: Any, names: list[str], settings: dict[str, Any]) ->
         return
 
     zip_buffer = io.BytesIO()
+    training_buffer = io.BytesIO()
     total_counts: dict[str, int] = {name: 0 for name in names}
     total_detections = 0
 
     progress = st.progress(0.0, text="Processing…")
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+    with (
+        zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf_annotated,
+        zipfile.ZipFile(training_buffer, "w", zipfile.ZIP_DEFLATED) as zf_training,
+    ):
+        zf_training.writestr("classes.txt", "\n".join(names))
+        zf_training.writestr("data.yaml", f"nc: {len(names)}\nnames: {names}\n")
+
         for i, uploaded in enumerate(uploaded_files):
             image = Image.open(uploaded).convert("RGB")
             detections = run_inference(
@@ -956,8 +1014,15 @@ def mode_batch_images(model: Any, names: list[str], settings: dict[str, Any]) ->
                     total_counts[names[cls_id]] += 1
             total_detections += len(detections["boxes"])
 
-            out_name = f"{Path(uploaded.name).stem}_pred.png"
-            zf.writestr(out_name, image_to_png_bytes(annotated))
+            stem = Path(uploaded.name).stem
+            img_w, img_h = image.size
+
+            zf_annotated.writestr(f"{stem}_pred.png", image_to_png_bytes(annotated))
+
+            img_bytes = io.BytesIO()
+            image.save(img_bytes, format="PNG")
+            zf_training.writestr(f"images/{stem}.png", img_bytes.getvalue())
+            zf_training.writestr(f"labels/{stem}.txt", _yolo_label_txt(detections, img_w, img_h))
 
             with st.expander(f"{uploaded.name} — {len(detections['boxes'])} detection(s)", expanded=False):
                 left, right = st.columns(2)
@@ -973,10 +1038,17 @@ def mode_batch_images(model: Any, names: list[str], settings: dict[str, Any]) ->
     for col, name in zip(cols, names, strict=False):
         col.metric(name, total_counts.get(name, 0))
 
-    st.download_button(
+    col1, col2 = st.columns(2)
+    col1.download_button(
         "Download all annotated images (ZIP)",
         data=zip_buffer.getvalue(),
         file_name="batch_predictions.zip",
+        mime="application/zip",
+    )
+    col2.download_button(
+        "Export for training (YOLO)",
+        data=training_buffer.getvalue(),
+        file_name="batch_yolo_export.zip",
         mime="application/zip",
     )
 
