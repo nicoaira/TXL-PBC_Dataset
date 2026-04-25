@@ -626,8 +626,8 @@ def render_auth_page() -> None:
 # Model
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL_PATH = Path("runs/finetune/granular_wbc_ft/weights/best.pt")
-FALLBACK_MODEL_PATH = Path("models/best_finetune_2.pt")
+DEFAULT_MODEL_PATH = Path("models/best_granular_wbc.pt")
+FALLBACK_MODEL_PATH = Path("runs/finetune/granular_wbc_ft/weights/best.pt")
 CLASS_NAMES = [
     "RBC", "Platelets",
     "Neutrophil", "Lymphocyte", "Monocyte", "Eosinophil", "Basophil",
