@@ -13,3 +13,8 @@ Raabin-WBC/
 wbc/
 finetune_dataset*
 wbc_reviewed
+finetune_granular_dataset/
+finetune_v2_dataset/*
+cvat_review/*
+finetune_v2_dataset_src/*
+.claude/scheduled_tasks.lock
