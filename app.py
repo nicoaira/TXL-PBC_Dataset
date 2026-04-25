@@ -778,7 +778,7 @@ def render_detection_summary(
                     strict=False,
                 )
             ]
-            st.dataframe(rows, use_container_width=True)
+            st.dataframe(rows)
 
 
 def image_to_png_bytes(image: Image.Image) -> bytes:
@@ -807,27 +807,37 @@ def make_training_export_zip(
     entries: list[tuple[str, Image.Image, dict[str, Any]]],
     names: list[str],
 ) -> bytes:
-    """Build a YOLO-format training ZIP.
+    """Build a CVAT YOLO 1.1 compatible training ZIP.
 
-    entries: list of (original_filename, PIL image, detections dict)
+    Structure:
+        obj.names          - class names
+        obj.data           - darknet config (required by CVAT)
+        train.txt          - list of image paths
+        obj_train_data/
+            image1.png
+            image1.txt     - YOLO label
+            ...
     """
     buf = io.BytesIO()
-    yaml_body = (
-        f"nc: {len(names)}\n"
-        f"names: {names}\n"
+    obj_data = (
+        f"classes = {len(names)}\n"
+        f"names = obj.names\n"
+        f"train = train.txt\n"
+        f"backup = backup/\n"
     )
+    image_paths = [f"obj_train_data/{Path(n).stem}.png" for n, _, _ in entries]
+
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("classes.txt", "\n".join(names))
-        zf.writestr("data.yaml", yaml_body)
+        zf.writestr("obj.names", "\n".join(names))
+        zf.writestr("obj.data", obj_data)
+        zf.writestr("train.txt", "\n".join(image_paths))
         for orig_name, image, detections in entries:
             stem = Path(orig_name).stem
             img_w, img_h = image.size
-            # original image
             img_bytes = io.BytesIO()
             image.save(img_bytes, format="PNG")
-            zf.writestr(f"images/{stem}.png", img_bytes.getvalue())
-            # YOLO label
-            zf.writestr(f"labels/{stem}.txt", _yolo_label_txt(detections, img_w, img_h))
+            zf.writestr(f"obj_train_data/{stem}.png", img_bytes.getvalue())
+            zf.writestr(f"obj_train_data/{stem}.txt", _yolo_label_txt(detections, img_w, img_h))
     return buf.getvalue()
 
 
@@ -900,8 +910,8 @@ def mode_camera(model: Any, names: list[str], settings: dict[str, Any]) -> None:
     )
     annotated = draw_detections(image, detections["boxes"], detections["confs"], detections["classes"], names)
     left, right = st.columns(2)
-    left.image(image, caption="Snapshot", use_container_width=True)
-    right.image(annotated, caption="Predictions", use_container_width=True)
+    left.image(image, caption="Snapshot")
+    right.image(annotated, caption="Predictions")
     render_detection_summary(detections, names)
     st.download_button(
         "Download annotated image",
@@ -924,7 +934,7 @@ def mode_upload_image(model: Any, names: list[str], settings: dict[str, Any]) ->
         return
 
     image = Image.open(uploaded).convert("RGB")
-    st.image(image, caption="Uploaded image", use_container_width=True)
+    st.image(image, caption="Uploaded image")
 
     if _credits_warning(1):
         return
@@ -943,8 +953,8 @@ def mode_upload_image(model: Any, names: list[str], settings: dict[str, Any]) ->
     )
     annotated = draw_detections(image, detections["boxes"], detections["confs"], detections["classes"], names)
     left, right = st.columns(2)
-    left.image(image, caption="Original", use_container_width=True)
-    right.image(annotated, caption="Predictions", use_container_width=True)
+    left.image(image, caption="Original")
+    right.image(annotated, caption="Predictions")
     render_detection_summary(detections, names)
     col1, col2 = st.columns(2)
     col1.download_button(
@@ -996,8 +1006,15 @@ def mode_batch_images(model: Any, names: list[str], settings: dict[str, Any]) ->
         zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf_annotated,
         zipfile.ZipFile(training_buffer, "w", zipfile.ZIP_DEFLATED) as zf_training,
     ):
-        zf_training.writestr("classes.txt", "\n".join(names))
-        zf_training.writestr("data.yaml", f"nc: {len(names)}\nnames: {names}\n")
+        obj_data = (
+            f"classes = {len(names)}\n"
+            f"names = obj.names\n"
+            f"train = train.txt\n"
+            f"backup = backup/\n"
+        )
+        zf_training.writestr("obj.names", "\n".join(names))
+        zf_training.writestr("obj.data", obj_data)
+        image_stems: list[str] = []
 
         for i, uploaded in enumerate(uploaded_files):
             image = Image.open(uploaded).convert("RGB")
@@ -1016,20 +1033,26 @@ def mode_batch_images(model: Any, names: list[str], settings: dict[str, Any]) ->
 
             stem = Path(uploaded.name).stem
             img_w, img_h = image.size
+            image_stems.append(stem)
 
             zf_annotated.writestr(f"{stem}_pred.png", image_to_png_bytes(annotated))
 
             img_bytes = io.BytesIO()
             image.save(img_bytes, format="PNG")
-            zf_training.writestr(f"images/{stem}.png", img_bytes.getvalue())
-            zf_training.writestr(f"labels/{stem}.txt", _yolo_label_txt(detections, img_w, img_h))
+            zf_training.writestr(f"obj_train_data/{stem}.png", img_bytes.getvalue())
+            zf_training.writestr(f"obj_train_data/{stem}.txt", _yolo_label_txt(detections, img_w, img_h))
 
             with st.expander(f"{uploaded.name} — {len(detections['boxes'])} detection(s)", expanded=False):
                 left, right = st.columns(2)
-                left.image(image, caption="Original", use_container_width=True)
-                right.image(annotated, caption="Predictions", use_container_width=True)
+                left.image(image, caption="Original")
+                right.image(annotated, caption="Predictions")
 
             progress.progress((i + 1) / n, text=f"{i + 1}/{n} processed…")
+
+        zf_training.writestr(
+            "train.txt",
+            "\n".join(f"obj_train_data/{s}.png" for s in image_stems),
+        )
 
     progress.empty()
 
@@ -1166,7 +1189,7 @@ def mode_upload_video(model: Any, names: list[str], settings: dict[str, Any]) ->
         show = annotated_frames[::max(1, len(annotated_frames) // 8)][:8]
         cols = st.columns(min(4, len(show)))
         for col, frame in zip(cols * 2, show, strict=False):
-            col.image(frame, use_container_width=True)
+            col.image(frame)
 
 
 def mode_live(model: Any, names: list[str], settings: dict[str, Any]) -> None:
@@ -1414,7 +1437,7 @@ def main() -> None:
     st.sidebar.subheader("Buy Credits")
     if st.sidebar.button("Buy 100 Credits ($5)", use_container_width=True, type="primary"):
         _create_stripe_checkout(100, 500)
-    if st.sidebar.button("Buy 500 Credits ($20)", use_container_width=True):
+    if st.sidebar.button("Buy 500 Credits ($20)"):
         _create_stripe_checkout(500, 2000)
 
     if _is_admin():
