@@ -626,8 +626,9 @@ def render_auth_page() -> None:
 # Model
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL_PATH = Path("runs/finetune/granular_wbc_ft_v3_cls_only/weights/best.pt")
-FALLBACK_MODEL_PATH = Path("models/best_granular_wbc.pt")
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEFAULT_MODEL_PATH = PROJECT_ROOT / "models/best_granular_wbc_v3.pt"
+FALLBACK_MODEL_PATH = PROJECT_ROOT / "models/best_granular_wbc.pt"
 CLASS_NAMES = [
     "RBC", "Platelets",
     "Neutrophil", "Lymphocyte", "Monocyte", "Eosinophil", "Basophil",
@@ -663,7 +664,7 @@ def resolve_model_path(user_override: str | None) -> Path:
         if candidate.exists():
             return candidate.resolve()
     for found in sorted(
-        Path("runs").glob("**/weights/best.pt"),
+        (PROJECT_ROOT / "runs").glob("**/weights/best.pt"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     ):
