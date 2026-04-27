@@ -648,10 +648,8 @@ CLASS_COLORS = {
 def load_model(model_path: str):
     try:
         from ultralytics import YOLO
-    except ImportError as exc:
-        raise RuntimeError(
-            "ultralytics is not installed. Run: pip install -r requirements.txt"
-        ) from exc
+    except Exception as exc:
+        raise RuntimeError(f"Failed to import ultralytics: {exc!r}") from exc
     return YOLO(model_path)
 
 
