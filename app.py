@@ -1226,13 +1226,32 @@ def mode_live(model: Any, names: list[str], settings: dict[str, Any]) -> None:
         if key not in st.session_state:
             st.session_state[key] = None if key == "live_credit_start" else 0
 
+    zoom = st.slider(
+        "Zoom",
+        min_value=1.0,
+        max_value=5.0,
+        value=1.0,
+        step=0.1,
+        help="Digital zoom: center-crops the frame and rescales it before detection.",
+    )
+
     class Transformer(VideoTransformerBase):
         def __init__(self) -> None:
             self.model = model
             self.names = names
+            self.zoom = 1.0
 
         def transform(self, frame) -> np.ndarray:
             image_np = frame.to_ndarray(format="bgr24")
+            if self.zoom > 1.0:
+                h, w = image_np.shape[:2]
+                new_h = max(1, int(h / self.zoom))
+                new_w = max(1, int(w / self.zoom))
+                y0 = (h - new_h) // 2
+                x0 = (w - new_w) // 2
+                cropped = image_np[y0:y0 + new_h, x0:x0 + new_w]
+                pil_zoomed = Image.fromarray(cropped[:, :, ::-1]).resize((w, h), Image.BILINEAR)
+                image_np = np.asarray(pil_zoomed)[:, :, ::-1]
             rgb = image_np[:, :, ::-1]
             predict_kwargs: dict[str, Any] = {
                 "source": rgb,
@@ -1264,6 +1283,9 @@ def mode_live(model: Any, names: list[str], settings: dict[str, Any]) -> None:
         video_transformer_factory=Transformer,
         media_stream_constraints={"video": True, "audio": False},
     )
+
+    if webrtc_ctx.video_transformer is not None:
+        webrtc_ctx.video_transformer.zoom = zoom
 
     # Deduct credits based on elapsed wall-clock time (runs on each Streamlit rerun)
     if webrtc_ctx.state.playing:
