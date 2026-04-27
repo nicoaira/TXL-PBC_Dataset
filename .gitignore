@@ -19,3 +19,5 @@ finetune_v2_dataset/*
 finetune_v2_dataset_src/*
 cvat_review/*
 .claude/scheduled_tasks.lock
+finetune_micro_dataset/*
+micro_yolo_converted.zip
