@@ -1231,7 +1231,7 @@ def mode_live(model: Any, names: list[str], settings: dict[str, Any]) -> None:
 
     try:
         import av  # noqa: F401
-        from streamlit_webrtc import VideoTransformerBase, webrtc_streamer
+        from streamlit_webrtc import RTCConfiguration, VideoTransformerBase, webrtc_streamer
     except ImportError:
         st.error(
             "Live mode needs `streamlit-webrtc` and `av`. Install with:\n\n"
@@ -1305,9 +1305,9 @@ def mode_live(model: Any, names: list[str], settings: dict[str, Any]) -> None:
         key="txl-pbc-live",
         video_transformer_factory=Transformer,
         media_stream_constraints={"video": True, "audio": False},
-        rtc_configuration={
+        rtc_configuration=RTCConfiguration({
             "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-        }
+        })
     )
 
     if webrtc_ctx.video_transformer is not None:
