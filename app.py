@@ -116,6 +116,11 @@ def _get_admin_firestore_client():
 
 
 def _get_user_credits(user_id: str, id_token: str) -> int:
+    if user_id == "guest_12345":
+        if "credits" not in st.session_state or st.session_state.credits is None:
+            st.session_state.credits = 1000
+        return st.session_state.credits
+
     admin_db = _get_admin_firestore_client()
     if admin_db is not None:
         doc_ref = admin_db.collection("users").document(user_id)
@@ -153,6 +158,10 @@ def _get_user_credits(user_id: str, id_token: str) -> int:
 
 
 def _save_user_credits(user_id: str, id_token: str, credits: int) -> bool:
+    if user_id == "guest_12345":
+        st.session_state.credits = credits
+        return True
+
     admin_db = _get_admin_firestore_client()
     if admin_db is not None:
         admin_db.collection("users").document(user_id).set(
@@ -618,6 +627,19 @@ def render_auth_page() -> None:
             st.error(st.session_state.auth_error)
 
         st.markdown('<div class="auth-divider">or</div>', unsafe_allow_html=True)
+        
+        if st.button("Continue as Guest (1000 credits)", use_container_width=True):
+            st.session_state.user = {
+                "email": "guest@bloodcells.local",
+                "localId": "guest_12345",
+                "idToken": "guest_token",
+                "refreshToken": "guest_refresh_token",
+                "displayName": "Guest",
+            }
+            st.session_state.auth_error = None
+            st.session_state.credits = 1000
+            st.rerun()
+
         _do_google_signin()
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1283,6 +1305,9 @@ def mode_live(model: Any, names: list[str], settings: dict[str, Any]) -> None:
         key="txl-pbc-live",
         video_transformer_factory=Transformer,
         media_stream_constraints={"video": True, "audio": False},
+        rtc_configuration={
+            "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+        }
     )
 
     if webrtc_ctx.video_transformer is not None:
