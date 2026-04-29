@@ -1232,10 +1232,10 @@ def mode_live(model: Any, names: list[str], settings: dict[str, Any]) -> None:
     try:
         import av  # noqa: F401
         from streamlit_webrtc import RTCConfiguration, VideoTransformerBase, webrtc_streamer
-    except ImportError:
+    except ImportError as e:
         st.error(
-            "Live mode needs `streamlit-webrtc` and `av`. Install with:\n\n"
-            "```\npip install streamlit-webrtc av\n```"
+            f"Live mode needs `streamlit-webrtc` and `av`. Import failed with error: {e}\n\n"
+            "Install with:\n```\npip install streamlit-webrtc av\n```"
         )
         return
 
